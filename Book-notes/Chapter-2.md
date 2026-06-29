@@ -417,3 +417,110 @@ On a Linux system that means configurating cgroups and namespaces.
 The interface to this container runtime is defined by the Container Runtime Interface (CRI) standard.
 The CRI API is implemented by a number of different progerams, including the `containerd-cri` built by Docker and the `cri-o` implementation contributed by Red Hat.
 When you install the Docker tooling, the `containerd` runtime is also installed and used by the docker daemon.
+
+Starting with release 1.25 of Kubernetes, only container runtimes that support the CRI will work with Kubernetes.
+Fortunately, managed Kubernetes providers have made this transition nearly automatic for users of managed Kubernetes.
+
+### Running Containers with Docker
+
+In Kubernetes, containers are usually launched by a daemon on each node called the kubelet; however, it's easier to get started with containers using the Docker command-line tool.
+The Docker CLI tool can be used to deploy containers.
+To deploy a container from the `grc.io/kuar-demo/kuard-amd64:blue` image, run the following command:
+
+```bash
+docker run -d --name kuard \
+--publish 8080:8080 \
+grc.io/kuar-demo/kuard-amd64:blue
+```
+
+This command starts the kuard container and maps ports 8080 on your local machine to 8080 in the container.
+The --publish option can be shortended to -p.
+This forwarding is neccessary because each container gets its own IP address, so listening on localhost inside the container doesn't cause you to listen on your machine.
+Without the port forwarding, connections will be inaccessible to your machine.
+The -d option specifies that this should run in the background (daemon), while --name kuard gives the container a friendly name.
+
+### Exploring the kuard Application
+
+kuard exposes a simple web interface, which you can load by pointing your browser at http://localhost:3000 or via the command line:
+
+`curl http://localhost:8080`
+
+kuard also exposes a number of interesting function that we will explore later on in this book.
+
+### Limiting Resource Usage
+
+Docker enables applications to use fewer resources by exposing the underlying cgroup technology provided by the Linux kernel.
+These capabilities are likewise used by Kubernetes to limit the resources each pod uses.
+
+#### Limiting memory resources
+
+One of the key benefits to running applications within a container is the ability to restrict resource utilization.
+This allows multiple applications to coexist on the same hardware and ensure fair usage.
+
+To limit kuard to 200 MB of memory and 1 GB of swap space, use the --memory and --memory-swap flags with the docker run command.
+
+Stop and remove the current kuard container:
+
+```bash
+docker stop kuard
+docker rm kuard
+```
+
+Then start another kuard container using the appropriate flags to limit memory usage:
+
+```bash
+docker run -d --name kuard \
+--publish 8080:8080 \
+--memory 200m \
+--memory-swap 1 G \
+gcr.io/kuar-demo/kuard-amd64:blue
+```
+
+If the program in the container uses too much memory, it will be terminated.
+
+#### Limiting CPU resources
+
+Another critical resouce on the machine is CPU.
+Restrict CPU utilization using the --cpu-shares flag with the docker run command:
+
+```bash
+docker run -d --name kuard \
+--publish 8080:8080 \
+--memory 200m \
+--memory-swap 1 G \
+--cpu-shares 1024 \
+gcr.io/kuar-demo/kuard-amd64:blue
+```
+
+## Cleanup
+
+Once you are done building an image, you can delete it with the docker rmi command:
+`docker rmi <tag-name>`
+or
+`docker rmi <image-id>`
+
+Images can either be deleted via their tag name (e.g. gcr.io/kuar-demo/kuard-amd64:blue) or via their image ID.
+As with all ID values in the docker tool, the image ID can be shortened as long as it remains unique.
+Generally one three or four characters of the ID are necessary.
+
+It's important to note that unless you explicitly delete an image, it will live on your system forever, even if build a new image with an identical name.
+Building this new image simply moves the tag to the new image; it doesn't delete or replace the old image.
+
+Consequently, as you iterate while you are creating a new image, you will often create many, many different images that take up unnecessary space on your computer.
+To see the images currently on your machine, you can use the docker images command.
+You can then delete tags you are no longer using.
+
+Docker provides a tool called docker system prune for doing general cleanup.
+This will remove all stopped containers, all untagged images, and all unused image layers cached as part of the build process.
+Use it carefully.
+
+A slighly more sophisticated approach is to set up a cron job to run an image garbage collector.
+For example, you can easily run docker system prune as a recurring cron job, once per day or once per hour, depending on how many images you are creating.
+
+## Summary
+
+Application containers provide a clean abstraction for applications, and when packaged in the Docker image format, applications become easy to build, deploy, and distribute.
+Containers also provide isolation between applications running on the same machine, which helps avoid dependency conflicts.
+
+In future chapters, we'll see how the ability to mount external directories means we can run not only stateless applications in a container, but also applications like MySQL and other that generate lots of data.
+
