@@ -158,3 +158,195 @@ If you are not, you may run into problems
 **EON**
 
 Now that we've established that you can communicate with your kubernetes cluster, we'll explore the cluster in more depth.
+
+First, you can get a simple diagnostic for the cluster.
+This is a good way to verify that your cluster is generally healthy:
+
+`kubectl get componentsstatuses`
+
+The output should look like this
+
+```bash
+
+NAME                 STATUS    MESSAGE              ERROR
+scheduler            Healthy   ok
+controller-manager   Healthy   ok
+etcd-0               Healthy   {"health": "true"}
+
+```
+
+**Note**
+
+As Kubernetes changes and improves over time, the output of the kubectl command sometimes changes.
+Don't worry if the output doesn't look exactly identical to what is shown in the examples in this book
+
+**EON**
+
+You can see here the components that make up the Kubernetes cluster.
+The controller-manager is responsible for running various controllers that regulate behavior in the cluster; for example, ensuring that all of the replicas of a service are available and healthy.
+The scheduler is responsible for placing different Pods onto different nodes in the cluster.
+Finally the etcd server is the storage for the cluster where all of the API objects are stored.
+
+### Listing Kubernetes Nodes
+
+Next, you can list out all of the nodes in your cluster
+
+```bash
+kubectl get nodes
+NAME     STATUS   ROLES                  AGE     VERSION
+kube0    Ready    control-plane,master   45d     v1.22.4
+kube1    Ready    <none>                 45d     v1.22.4
+kube2    Ready    <none>                 45d     v1.22.4
+kube3    Ready    <none>                 45d     v1.22.4
+```
+
+You can see this is a four-node cluster that's been up for 45 days.
+In Kubernetes, nodes are separated into control-plane nodes that contain containers like the API server, scheduler, etc. which manage the cluster, and worker nodes where your containers will run.
+Kubernetes won't generally schedule work onto control-plan nodes to ensure that user workloads don't harm the overall operation of the cluster.
+
+You can use the `kubectl describe` command to get more information about a specific node, such as `kube1`:
+
+`kubectl describe nodes kube1`
+
+First, you see basic information about the node:
+
+```bash
+Name:                   kube1
+Role:
+Labels:                 beta.kubernetes.io/arch=arm
+                        beta.kubernetes.io/os=linux
+                        kubernetes.io/hostname=node-1
+```
+
+You can see that this node is running the Linux OS on an ARM processor.
+
+Next, you see information abou the operation of `kube1` itself (dates have been removed from this output for concision):
+
+```bash
+Conditions:
+  Type                 Status  ...   Reason                       Message
+ -----                 ------        ------                       -------
+  NetworkUnavailable   False   ...   FlannelIsUp                  Flannel...
+  MemoryPressure       False   ...   KubeletHasSufficientMemory   kubelet...
+  DiskPressure         False   ...   KubeletHasNoDiskPressure     kubelet...
+  PIDPressure          False   ...   KubeletHasSufficientPID      kubelet...
+  Ready                True    ...   KubeletReady                 kubelet...
+
+```
+
+These statuses show that the node has sufficent disk and memory space and is reporting that it is healthly to the Kubernetes master.
+Next, there is information about the capacity of the machine:
+
+```bash
+Capacity:
+ alpha.kubernetes.io/nvidia-gpu:        0
+ cpu:                                   4
+ memory:                                882636Ki
+ pods:                                  110
+Allocatable:
+ alpha.kubernetes.io/nvidia-gpu:        0
+ cpu:                                   4
+ memory:                                882636Ki
+ pods:                                  110
+```
+
+Then there is information about the software on the node, including the version of Docker that is running, the versions of Kubernetes and the Linux kernel and more:
+
+```bash
+System Info:
+  Machine ID:                 44d8f5dd42304af6acde62d233194cc6
+  System UUID:                c8ab697e-fc7e-28a2-7621-94c691120fb9
+  Boot ID:                    e78d015d-81c2-4876-ba96-106a82da263e
+  Kernel Version:             4.19.0-18-amd64
+  OS Image:                   Debian GNU/Linux 10 (buster)
+  Operating System:           linux
+  Architecture:               amd64
+  Container Runtime Version:  containerd://1.4.12
+  Kubelet Version:            v1.22.4
+  Kube-Proxy Version:         v1.22.4
+PodCIDR:                      10.244.1.0/24
+PodCIDRs:                     10.244.1.0/24
+```
+
+Finally, there is information about the POds that are currently running on this node:
+
+```bash
+Non-terminated Pods:            (3 in total)
+  Namespace   Name        CPU Requests CPU Limits Memory Requests Memory Limits
+  ---------   ----        ------------ ---------- --------------- -------------
+  kube-system kube-dns...  260m (6%)    0 (0%)     140Mi (16%)     220Mi (25%)
+  kube-system kube-fla...  0 (0%)       0 (0%)     0 (0%)          0 (0%)
+  kube-system kube-pro...  0 (0%)       0 (0%)     0 (0%)          0 (0%)
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.
+  CPU Requests  CPU Limits      Memory Requests Memory Limits
+  ------------  ----------      --------------- -------------
+  260m (6%)     0 (0%)          140Mi (16%)     220Mi (25%)
+No events.
+```
+
+From this output, you can see the Pods on the node (e.g. the `kube-dns` Pod that supplies DNS services for the cluster), the CPU and memory that each Pod is requesting from the node, as well as the total resources requested.
+It's worth noting here that Kubernetes tracks both the requests and upper limits for resources for each Pod that runs on a machine.
+The difference between requests and limits is described in detail in Chapter 5, but in a nutshell, resources requested by a Pod are guarenteed to be present on teh node, while a Pod's limit is the maximum amount of a given resource that a Pod can consume.
+A Pod's limit can be higher than it's request, in which case the extra resources are supplied on a best-effort basis.
+They are not guarenteed to be present on the node.
+
+## Cluster Components
+
+One of the interesting aspects of Kubernetes is that many of the components that make up the Kubernetes cluster are actually deployed using Kubernetes itself.
+We'll take a look at a few of these.
+These components use a number of the concepts that we'll introduce in later chapter. All of these components run in the `kube-system` namespace.
+
+### Kubernetes Proxy
+
+The Kubernetes proxy is responsible for routing network traffic to load-balanced services in the Kubernetes cluster.
+To do its job, the proxy must be present on every node in the cluster.
+Kubernetes has an API object named DaemonSet, which you will learn about in Chapter 11, that is used in many clusters to accomplish this.
+If your cluster runs the Kubernetes proxy with a DaemonSet, you can see the proxies by running:
+
+```bash
+kubectl get daemonSets --namespace=kube-system kube-proxy
+NAME         DESIRED   CURRENT   READY   UP-TO-DATE   AVAILABLE   NODE SELECTOR
+kube-proxy   5         5         5       5            5           ...   45d
+```
+
+Depending on how your cluster is set up, the DaemonSet for the `kube-proxy` may be named something else, or it's possible that it won't use a DaemonSet at all.
+Regardless, the `kube-proxy` container should be running on all nodes in the cluster.
+
+### Kubernetes DNS
+
+Kubernetes also runs a DNS server, which provides naming and discovery for the services that are defined in the cluster.
+This DNS server also runs as a replicated service on the cluster.
+Depending on the size of your cluster, you may see one or more DNS servers running in your cluster.
+The DNS service is run as a Kubernetes deployment, which manages these replicas (this may also be named `coredns` or some other variant):
+
+```bash
+kubectl get deployments --namespace=kube-system core-dns
+NAME       DESIRED   CURRENT   UP-TO-DATE   AVAILABLE   AGE
+core-dns   1         1         1            1           45d
+```
+There is also a kubernetes service that performs load balancing for the DNS server:
+
+```bash
+kubectl get services --namespace=kube-system core-dns
+NAME       CLUSTER-IP   EXTERNAL-IP   PORT(S)         AGE
+core-dns   10.96.0.10   <none>  53/UDP,53/TCP   45d
+```
+
+This shows that the DNS service for the cluster has the address 10.96.0.10.
+If you log in to a container in the cluster, you'll see that this has been populated in the /etc/resolv.conf file for the container.
+
+### Kuberntetes UI
+
+If you want to visualize your cluster in a graphical user interface, most of the cloud providers integrate such a visualization into the GUI for the cloud.
+If your cloud provider doesn't provide such a UI, or you perfer an in-cluster GUI, there is a community supported GUI that you can install.
+See the documentation on how to install the dashboards for these clusters.
+You can also use extension for development environments like Visual Studio Code to see the state of your cluster at a glance.
+
+## Summary
+
+Hopefully at this point you have a Kubernetes cluster (or three) up and running and you've used a few commands to explore the cluster you have created.
+Next, we'll spend some more time exploring the CLI to that Kubernetes cluster and teach you how to master the `kubectl` tool.
+Throughout the rest of the book, you'll be using `kubectl` and your test cluster to explore the various objects in the Kubernetes API>
+
+As you'll learn in the next chapter, a namespace in Kubernetes is an entity for ongoing Kubernetes resources. You can think of it like a folder in a filesystem.
