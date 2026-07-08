@@ -467,6 +467,23 @@ As you seen, the Ingress object provides a very useful abstraction for configuri
 Many of the features in Ingress are underdefined.
 Implementations can surface these features in different ways, reducing the portability of configurations between implementations.
 
-Another probel is that it is easy to misconfigure Ingress.
+Another problem is that it is easy to misconfigure Ingress.
 The way that multiple objects combine opens the door for conflicts that are resolved differently by different implementations.
 In addition, the way that these are merged across namespaces breaks the idea of namespace isolation.
+
+Ingress was also created before the idea of a service mesh (exemplified by projects such as Isito and Linkerd) was well known.
+The intersection of Ingress and service meshes is still being defined.
+Service meshes are covered in greater detail in Chapter 15.
+
+The future of HTTP load balancing for Kubernetes looks to be the Gateway API, whch is in the midst of development by the Kubernetes special interest group (SIG) dedicated to networking.
+The gateway API project is intended to develop a more modern API for routing in Kubernetes.
+Though it is more focused on HTTP balancing, Gatewat also includes resources for controlling layer 4 (TCP) balancing.
+The Gateway APIs are still very much under development, so it is strongly recommended that people stick to the existing Ingress and Service resources that are curently present in Kubernetes. The current state of the Gateway API can be found online.
+
+## Summary
+
+Ingress is a unique system in Kubernetes.
+It is simply a schema, and the implementations of a controller for that schema must be installed and managed separately.
+But it also a critical system for exposing services to users in a practical and cost-efficent way.
+As Kubernetes continues to mature, expect ot see Ingress become more and more relevant.
+
