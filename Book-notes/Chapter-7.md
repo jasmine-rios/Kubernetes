@@ -292,4 +292,272 @@ Events:
   2m        ... CreatedLoadBalancer   Created load balancer
 ```
 
-Here we see that we have an address of 104.196.248.204 now assigned to the 
+Here we see that we have an address of 104.196.248.204 now assigned to the `alpaca-prod` service. Open up your browser and try!
+
+**NOTE**
+This example is from a cluster launched and managed on the Google Cloud Platform via GKE.
+The way a load balancer is configured is specific to a cloud.
+Some clouds have DNS-based load balancers (e.g., AWS Elastic Load Balancing [ELB]).
+In this case, you'll see a hostname here instead of an IP.
+Depending on the cloud provider, it may still take a little while for the load balancer to be fully operational.
+**EON**
+
+Creating a cloud-based load balancer can take some time. Don't be surprised if it takes a few minutes on most cloud providers.
+
+The example that we have seen so far use external load balancers; that is, load balancers that are connected to the public internet.
+While this is great for exposing services to the world, you'll often want to expose your application within only your private network.
+To achieve this, use an internal load balancer.
+Unfortunately, because support for internal load balancers was added to Kubernetes more recently, it is done in a somewhat ad hoc manner via object annotations.
+For example, to create an internal load balancer in an Azure Kubernetes Service cluster, you add the annotation `service.beta.kubernetes.io/azure-load-balancer-internal: "true"` to your `Service` resource.
+Here are the settings for some popular clouds:
+
+    Microsoft Azure
+        service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+    
+    Amazon Web Services
+        service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    
+    Alibaba Cloud
+        service.beta.kubernetes.io/alibaba-cloud-loadbalancer-address-type: "intranet"
+    
+    Google Cloud Platform
+        cloud.google.com/load-balancer-type:"Internal"
+
+When you add this annotation to your service, it should look like this:
+
+```yaml
+...
+metadata:
+    ...
+    name: some-service
+    annotations:
+        service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+...
+```
+
+When you create a service with one of these annotations, an internally exposed service will be created instead of one on the public internet.
+
+**TIP**
+There are several other annotations that extend LoadBalancer behavior, including ones for using a preexisting IP address.
+The specific extensions for your provider should be documentated on its website.
+**EOT**
+
+## Advanced Details
+
+Kubernetes is built to be an extensible system.
+As such, there are layers that allow for more advanced integrations.
+Understanding the details of how a sophisticated concept like services is implemented may help you troublshoot or create more advanced integrations.
+This secrion goes a bit below the surface.
+
+### Endpoints
+
+Some applications (and the system itself) want to be able to use services without using a cluster IP.
+This is done with another type of object called an Endpoints object.
+For every Service object, Kubernetes creates a buddy Endpoints object that contains the IP address for that service:
+
+```bash
+$ kubectl describe endpoints alpaca-prod
+
+Name:           alpaca-prod
+Namespace:      default
+Labels:         app=alpaca
+Subsets:
+  Addresses:            10.112.1.54,10.112.2.84,10.112.2.85
+  NotReadyAddresses:    <none>
+  Ports:
+    Name        Port    Protocol
+    ----        ----    --------
+    <unset>     8080    TCP
+
+No events.
+```
+
+To use a service, an advanced application can talk to the Kubernetes API directly to look up endpoints and call them.
+The Kubernetes API eben has the capability to "watch" objects and be notified as soon as they change.
+In this way, a client can react immediately as soon as the IPs associated with a service change.
+
+Let's demonstrate this.
+In a terminal window, start the following command and leave it running:
+
+`kubectl get endpoints alpaca-prod --watch`
+
+It will output the current state of the endpoint and then "hang":
+
+```bash
+NAME          ENDPOINTS                                            AGE
+alpaca-prod   10.112.1.54:8080,10.112.2.84:8080,10.112.2.85:8080   1m
+```
+
+Now open up another terminal window and delete and re-create the deployment backing `alpaca-prod`:
+
+```bash
+$ kubectl delete deployment alpaca-prod
+$ kubectl create deployment alpaca-prod \
+  --image=gcr.io/kuar-demo/kuard-amd64:blue \
+  --port=8080
+$ kubectl scale deployment alpaca-prod --replicas=3
+```
+
+If you look back at the output from the watched endpoint, you will see that as your deleted and recreated these pods, the output of the command recreated these pods, the output of the commands reflected the most up-to-date set of IP addresses associated with the service.
+Your output will look something like this:
+
+```bash
+NAME          ENDPOINTS                                            AGE
+alpaca-prod   10.112.1.54:8080,10.112.2.84:8080,10.112.2.85:8080   1m
+alpaca-prod   10.112.1.54:8080,10.112.2.84:8080                    1m
+alpaca-prod   <none>                                               1m
+alpaca-prod   10.112.2.90:8080                                     1m
+alpaca-prod   10.112.1.57:8080,10.112.2.90:8080                    1m
+alpaca-prod   10.112.0.28:8080,10.112.1.57:8080,10.112.2.90:8080   1m
+```
+
+The Endpoints object is great if you are writing new code that is built to run on Kubernetes from the start.
+But most projects aren't in this position~
+Most existing systems are built to work with regulard old IP addresses that don't change that often.
+
+### Manual Service Discovery
+
+Kubernetes services are built on top of label selectors over Pods.
+That means that you can use the Kubernetes API to do rudimentary service discovery without using a Service objecy at all!
+Let's demonstate.
+
+With `kubectl` (and via the API) we can easily see what IPs are assigned to each Pod in our example deployments:
+
+```bash
+kubectl get pods -o wide --show-labels
+
+NAME                            ... IP          ... LABELS
+alpaca-prod-12334-87f8h    ... 10.112.1.54 ... app=alpaca
+alpaca-prod-12334-jssmh    ... 10.112.2.84 ... app=alpaca
+alpaca-prod-12334-tjp56    ... 10.112.2.85 ... app=alpaca
+bandicoot-prod-5678-sbxzl  ... 10.112.1.55 ... app=bandicoot
+bandicoot-prod-5678-x0dh8  ... 10.112.2.86 ... app=bandicoot
+```
+
+This is great, but what if you have a ton of Pods?
+You'll probably want to filter this based on the labels applied as part of the deployment.
+Let's do that for just the alpaca app:
+
+```bash
+$ kubectl get pods -o wide --selector=app=alpaca
+
+NAME                         ... IP          ...
+alpaca-prod-3408831585-bpzdz ... 10.112.1.54 ...
+alpaca-prod-3408831585-kncwt ... 10.112.2.84 ...
+alpaca-prod-3408831585-l9fsq ... 10.112.2.85 ...
+```
+
+At this point, you have the basics of service discovery!
+You can always use labels to identify the set of Pods you are interested in, get all of the Pods for those labels, and dig out the IP address.
+But keeping the correct set of labels to use in sync can be tricky.
+This is why the Service object was created.
+
+### kube-proxy and Cluster IPs
+
+Cluster IPs are stable virtual IPs that load balance traffic across all of the endpoints in a service.
+This magic is performed by a component running on every node in the cluster called the `kube-proxy`.
+
+The `kube-proxy` watches for new services in the cluster via the API server.
+It then programs a set of `iptables` rules in the kernel of the host to rewrite the destinations of packets so they are directed at one of the endpoints for that service.
+If the set of endpoints for a service changes (due to Pods coming and going or due to a failed readiness check), the set of `iptables` rules is rewritten.
+
+The cluster IP itself is usually assigned by the API server as the service is created.
+However, when creating the service, the user can specify a specific cluster IP. 
+Once set, the cluster IP cannot be modified without deleting and re-creating the Service object.
+
+**NOTE**
+The kubernetes servic address range is configured using the `--service-cluster-ip-range` flag on the `kube-apiserver` binary.
+The service address range should not overlap with the IP subnets and ranges assigned to each Docker bridge or Kubernetes node.
+In addition, any explicit cluster IP requested must come from that range and not already be in use.
+**EON**
+
+### Cluster IP Environment Variables
+
+While most users should be using the DNS services to find cluster IPs, there are some older mechanisms that may still be in use.
+One of these is injecting a set of environment variables into Pods as they start up.
+
+To see this in action, let's look at the console for the `bandicoot` instance of `kuard`. 
+Enter the following commands in your terminal:
+
+```bash
+$ BANDICOOT_POD=$(kubectl get pods -l app=bandicoot \
+    -o jsonpath='{.items[0].metadata.name}')
+$ kubectl port-forward $BANDICOOT_POD 48858:8080
+```
+
+Now point your browser to http://localhost:48858 to see the status page for this server.
+Expand the "Server Env" section and note the set of environment variables for the `alpaca` service.
+
+The two main enviornment variables to use are `ALPACA_PROD_SERVICE_HOST` and `ALPACA_PROD_SERVICE_PORT`.
+The other environment variables are created to be compatiable with (now deprecated) Docker link variables.
+
+A problem with the environment variable approach is that it requires resources to be created in a specific order.
+The services must be created before the Pods that reference them.
+This can introduce quite a bit of complexity when deploying a set of services that make up a larger application.
+In addition, using just environment variables seems strange to many users.
+For this reason, DNS is probably a better option.
+
+## COnnecting With Other Environments
+
+While it is great to have service discovery within your own cluster, many real-world applications actually require that you integrate more cloud native applications deployed in Kubernetes with application deployed to more legacy environments.
+Additionally, you may need to integrate a Kuberenetes cluster in the cloud with infrastructure that has been deployed on-premise.
+This is an area of Kubernetes that is still undergoing a fair amount of exploration and development of solutions.
+
+### Connecting to Resources Outside of a Cluster
+
+When you are connecting Kubenetes to legacy resources outside of the cluster, you can use selector-less services to declare a Kubernetes service with a manually assigned IP address that is outside of the cluster.
+That way, Kubernetes service discovery via DNS works as expected, but the network traffic itself flows to an external resource.
+To create a selector-less service, you remove the `spec.selector` field from your resource, while leaving the `metadata` and the `ports` sections unchanged.
+Because your service has no selector, no endpoints are automatically added to the service.
+This means that you must add them manually.
+Typically the endpoint that you will add will be a fixed IP address (e.g. the IP address of your database server) so you only need to add it once.
+But if the IP address that backs the service ever changes, you will need to update the corresponding endpoint resource.
+To create or update the endpoint resource, you can use an endpoint that looks something like the following:
+
+```yaml
+apiVersion: v1
+kind: Endpoints
+metadata:
+  # This name must match the name of your service
+  name: my-database-server
+subsets:
+  - addresses:
+      # Replace this IP with the real IP of your server
+      - ip: 1.2.3.4
+    ports:
+      # Replace this port with the port(s) you want to expose
+      - port: 1433
+```
+
+### Connecting External Resources to Services Inside a Cluster
+
+Connecting external resources to Kubernetes services is somewhat trickier.
+If your cloud provider supports it, the easist thing to do is to create an "internal" load balancer, as described above, that lives in your virtual private network and can deliver traffic from a fixed IP address into the cluster.
+You can then use traditional DNS to make this IP address available to the external resource.
+If an internal load balancer isn't available, you can use a `NodePort` service to expose the service on the IP addresses of the nodes in the cluster.
+You can then either program a physical load balancer to serve traffic to those nodes, or use DNS-based load balancing to spread traffic between the nodes.
+
+If neither of those solutions work for your use case, more complex options include running the full `kube-proxy` on an external resource and programming that machine to use the DNS server in the Kubernetes cluster.
+Such a setup is significantly more difficult to get right and should really only be used in on-premises environments.
+There are also a variety of open source projects (for example, HashiCorp's Consul) that can be used to manage connectivity between in-cluster and out-of-cluster resources.
+Such options require significant knowledge of both networking and Kubernetes to get right and should really be considered a last resort.
+
+## Cleanup
+
+Run the following command to clean up all of the objects created in this chapter
+
+`$ kubectl delete services,deployments -l app`
+
+## Summary
+
+Kubernetes is a dynamic system that challenges traditional methods of naming and connecting services over the network.
+The service object provides a flexible and powerful way to expose services both within the cluster and beyond.
+With the techniques covered here, you can connect services to each other and expose them outside the cluster.
+
+While using the dynamic service discovery mechanisms in Kubernetes introduces some new concepts and may, at first, seem complex, understanding and adapting thse techniques is key to unlocking the power of Kubernetes.
+Once your applicaiton can dynamically find services and react to the dynamic placement of those applications, you are free to stop worrying about where things are running and when they move.
+Thinking about services in a logical way and letting Kubernetes take care of the details of container placement is a critical piece of the puzzle.
+
+Of course, service discovery is just the beginning of how application networking works with Kubernetes.
+Chapter 8 covers Ingress networking which is dedicated to Layer 7 (HTTP) load balancing and routing, and Chapter 15 is about service meshes, which are a more recently developed approach to cloud native networking that provide many additional capabilities in addition to service discovery and load balancing.
+
