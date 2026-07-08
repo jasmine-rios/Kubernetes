@@ -386,3 +386,87 @@ In that case, the app in question may be hosted on `/subpath` but have requests 
 It may then send a user to `/app-path`.
 There is then the question of whether that is an "internal" link for the app (in which case it should instead be `/subpath/app-path`) or a link to some other app.
 For this reason, it is probably best to avoid subpaths for any complicated application if you can help it.
+
+### Serving TLS
+
+When serving website, it is becoming increasingly necessary to do so securely using TLS and HTTPS.
+Ingress supports this (as do most Ingress controllers).
+
+First, users need to specify a Secret with their TLS certificate and keys--something like what is outlined in the file below.
+You can also create a secret imperatively with `kubectl create secret tls <secret-name> --cert <certificate-pem-file> --key <private-key-pem-file>`
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  creationTimestamp: null
+  name: tls-secret-name
+type: kubernetes.io/tls
+data:
+  tls.crt: <base64 encoded certificate>
+  tls.key: <base64 encoded private key>
+```
+
+Once you have the certificate uploaded, you can reference it in an Ingress object.
+This specifies a list of certificates along with the hostnames that those certificates should be used for.
+Again, if multiple Ingress object specify certificates for the same hostname, the behavior is undefined.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tls-ingress
+spec:
+  tls:
+  - hosts:
+    - alpaca.example.com
+    secretName: tls-secret-name
+  rules:
+  - host: alpaca.example.com
+    http:
+      paths:
+      - backend:
+          serviceName: alpaca
+          servicePort: 8080
+```
+
+Uploading and managing TLS secrets can be difficult.
+In addition, certificates can often come at a significant cost.
+To help solve this probelm, there is a nonprofit called "Let's Encrypt" running a free certificate Authority that is API-driven.
+Since it is API-driven, it is possible to set up a Kubernetes cluster that automatically fetches and installs TLS certificates for you.
+It can be trickly to set up, but when working, it's very simple to use.
+The missing piece is an open source project called cert-manager created by Jetstack, a UK startup, onboarded to the CNCF/
+The cert-manager.io website or GitHub respository has details on how to install cert-manager and get started.
+
+## Alernate Ingress Implementations
+
+There are many different implementations of Ingress controller, each building on the base Ingress object with unique features.
+It is a vibrant ecosystem.
+
+First, each cloud provider has an Ingress implementation that expose the specific cloud-based L7 load balancer for that cloud.
+Instead of configuring a software load balancer running in a Pod, these controllers take Ingress objects and use them to configure, via an API, the cloud-based load balancers.
+This reduces the load on the cluster and the management burden for the operators, but can often come at a cost.
+
+The most popular generic Ingress controller is probably the open source NGINX Ingress controller.
+Be aware that there is also a commerical controller based on the proprietary NGINX Plus.
+The open source controller essentially reads Ingress objects and merges them into an NGINX configuration file.
+It then signals to the NGINX process to restart with the new configuration (while responsibly serving existing in-flight connections).
+The open source NGINX controller has an enormous number of features and options exposed via annotations.
+
+Emissary and Gloo are two other Envoy-based Ingress controllers that are focused on being API gateways.
+
+Traefik is a reverse proxy implemented in Go that also can function as an ingress controller.
+It has a set of features and dashboards that are very developer-friendly.
+
+This just scratches the surface.
+The Ingress ecosystem is very active, and there are many new projects and commercial offerings that build on the humble Ingress object in unique ways.
+
+## The Future of Ingress
+
+As you seen, the Ingress object provides a very useful abstraction for configuring L7 load balancers-- but it hasn't scaled to all the features taht users want and various implementations are looking to offer.
+Many of the features in Ingress are underdefined.
+Implementations can surface these features in different ways, reducing the portability of configurations between implementations.
+
+Another probel is that it is easy to misconfigure Ingress.
+The way that multiple objects combine opens the door for conflicts that are resolved differently by different implementations.
+In addition, the way that these are merged across namespaces breaks the idea of namespace isolation.
