@@ -255,3 +255,95 @@ spec:
 ...
 ```
 
+In a multiuser setting, you would likely have a documented code review of this change and eventually check the changes into version control.
+Either way, you can then use the `kubectl apply` command to submit the updated `kuard` ReplicaSet to the API server:
+
+```bash
+$ kubectl apply -f kuard-rs.yaml
+replicaset "kuard" configured
+```
+
+Now that the updated `kuard` ReplicaSet is in place, the ReplicaSet controller will detect that the number of desired Pods has changed and that it needs to take action to realize the desired state.
+If you used the imperative `scale` command in the previous section, the ReplicaSet controller will destroy one Pod to get the number to three.
+Otherwise, it will submit two new Pods to the Kubernetes API using the Pod template defined on the `kuard` ReplicaSet.
+Regardless, use the `kubectl get pods` command to list the running `kuard` Pods.
+You should see output similar to the following with three Pods in running state; two will have a smaller age because they were recently started:
+
+```bash
+$ kubectl get pods
+NAME          READY     STATUS    RESTARTS   AGE
+kuard-3a2sb   1/1       Running   0          26s
+kuard-wuq9v   1/1       Running   0          26s
+kuard-yvzgd   1/1       Running   0          2m
+```
+
+### Autoscaling a ReplicaSet
+
+While there will be times when you want to have explicit control over the number of replicas in a ReplicaSet, often you simply want to have "enough" replicas.
+The definition varies depending on the needs of the containers in the ReplicaSet.
+For example, with a web server like NGINX, you might want to scale due to CPU usage.
+For an in-memory cache, you might want to scale with memory consumption.
+In some cases, you might want to scale in response to custom application metrics.
+Kubernetes can handle all of these scenarios via Horizontal Pod Autoscaling (HPA).
+
+"Horizontal Pod Autoscaling" is kind of a mouthful, and you might wonder why it is not simply called "autoscaling".
+Kubernetes makes a distinction between horizontal scaling, which involves creating additional replicas of a Pod, and vertical scaling, which involves increasing the resources required for a particular Pod (such as increasing the CPU required for the Pod).
+Many solutions also enable cluster autoscaling, where the number of machines in the cluster is scaled in response to resource needs, but that solution is outside the scope of this chapter.
+
+**NOTE**
+Autoscaling requires the presence of the `metrics-server` in your cluster.
+The `metrics-server` keeps track of metrics and provides an API for consuming metrics that HPA uses when making scaling decisions.
+Most installations of Kubernetes include `metrics-server` by default.
+You can validate its presence by listing the Pods in the `kube-system` namespace:
+
+`kubectl get pods --namespace=kube-system`
+
+You should see a Pod with a name that starts with `metrics-server` somewhere in that list.
+If you do not see it, autoscaling will not work correctly.
+**EON**
+
+Scaling based on CPU usage is the most common use case for Pod autoscaling.
+You can also scale based on memory usage.
+CPU-based autoscaling is most useful for request-based systems that consume CPU proportionally to the number of requests they are receiving, while using a relatively static amount of memory.
+
+To scale a ReplicaSet, you can run a command like the following:
+
+`kubectl autoscale rs kuard --min=2 --max=5 --cpu-percent=80`
+
+This command creates an autoscaler that scales between two and five replicas with a CPU threshold of 80%.
+To view, modify, or delete this resource, you can use the standard `kubectl` commands and the `horizontalpodautoscalers` resource.
+It is quite a bit to type `horizontalpodautoscalers`, but it can be shortened to `hpa`:
+
+`kubectl get hpa`
+
+**WARNING**
+Because of the decoupled nature of Kubernetes, there is no direct link between the HPA and the ReplicaSet.
+While this is great for modularity and composition, it also enables some antipatterns.
+In particular, it's a bad idea to combine autoscaling with imperatice or declarative management of the number of replicas.
+If both you and an autoscaler are attempting to modify the numbers of replicas, it's highly likely that you will clash, resulting in unexpected behavior.
+**EOW**
+
+## Deleting ReplicaSets
+
+When a ReplicaSet is no longer required, it can be deleted using the `kubectl delete` command.
+By default, this also deletes the Pods that are managed by the ReplicaSet:
+
+```bash
+$ kubectl delete rs kuard
+replicaset "kuard" deleted
+```
+
+Running the `kubectl get pods` command shows that all the `kuard` Pods are created by the kuard ReplicaSet have also been deleted:
+
+`kubectl get pods`
+
+If you don't want to delete the Pods that the ReplicaSet is managing, you can set the `--cascade` flag to `false` to ensure only the ReplicaSet object is deleted and not the Pods
+
+`kubectl delete rs kuard --cascade=false`
+
+## Summary
+
+Composing Pods with ReplicaSets provides the foundation for building robust applications with automatic failover, and makes deploying those applications a breeze by enabling scalable and sane deployment patterns.
+Use ReplicaSets for any Pod you care about, even if it is a single Pod!
+Some people even default to using ReplicaSets instead of Pods. 
+A typical cluster will have many ReplicaSets, so apply them liberally to the affected area.
