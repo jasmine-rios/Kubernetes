@@ -164,4 +164,247 @@ This can be useful for basic validation of the presence of required fields or th
 A complete OpenAPI tutorial is beyong the scope of this book, but there are lots of resource online, including the complete Kubernetes API specification.
 
 Generally speaking, an API schema is actually insufficent for validation of API objects.
-For example in our ``
+For example in our `loadtests` example, we may want to validate that the LoadTest object has a valid scheme (e.g., http or https) or that `requestsPerSecond` is a nonzero positive number.
+
+To accomplish this, we will use a validating admission controller.
+As discussed previously, admission controllers intercept requests to the API server before they are processed and can reject or modify the requests in flight.
+Admission controllers can be added to a cluster via the dynamic admission control system.
+A dyanamic admission controller is a simple HTTP application.
+The API server connects to the admission controller via either a Kubernetes Service object or an arbitrary URL.
+This means that admission controllers can optionally run outside of the cluster--for exmaple, in a cloud provider's Function-as-a-service offering, like Azure Functions or AWS Lambda.
+
+To install our validating admission controller, we need to specify it as Kubernetes ValidatingWebHookConfiguration.
+This object specifies the endpoint where the admission controller runs, as well as the resource (in this case LoadTest) and the action (in this case `CREATE`) where the admission controller should be run.
+You can see the full definition for the validating admission controller in the following code:
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1beta1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: kuar-validator
+webhooks:
+- name: validator.kuar.com
+  rules:
+  - apiGroups:
+    - "beta.kuar.com"
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - loadtests
+  clientConfig:
+    # Substitute the appropriate IP address for your webhook
+    url: https://192.168.1.233:8080
+    # This should be the base64-encoded CA certificate for your cluster,
+    # you can find it in your ${KUBECONFIG} file
+    caBundle: REPLACEME
+```
+
+Fortunately for security, but unfortunately for complexity, webhooks that are accessed by the Kubernetes API server can only be accessed via HTTPS.
+So we need to generate a certificate to serve the webhook.
+The easiest way to do this is to use the cluster's ability to generate new certificates using its own certificate authority (CA).
+
+First, we need a private key and a certificate signing request (CSR).
+Here's a simple GO program that generates these:
+
+```go
+package main
+
+import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/pem"
+	"net/url"
+	"os"
+)
+
+func main() {
+	host := os.Args[1]
+	name := "server"
+
+	key, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		panic(err)
+	}
+	keyDer := x509.MarshalPKCS1PrivateKey(key)
+	keyBlock := pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: keyDer,
+	}
+	keyFile, err := os.Create(name + ".key")
+	if err != nil {
+		panic(err)
+	}
+	pem.Encode(keyFile, &keyBlock)
+	keyFile.Close()
+
+	commonName := "myuser"
+	emailAddress := "someone@myco.com"
+
+	org := "My Co, Inc."
+	orgUnit := "Widget Farmers"
+	city := "Seattle"
+	state := "WA"
+	country := "US"
+
+	subject := pkix.Name{
+		CommonName:         commonName,
+		Country:            []string{country},
+		Locality:           []string{city},
+		Organization:       []string{org},
+		OrganizationalUnit: []string{orgUnit},
+		Province:           []string{state},
+	}
+
+	uri, err := url.ParseRequestURI(host)
+	if err != nil {
+		panic(err)
+	}
+
+	asn1, err := asn1.Marshal(subject.ToRDNSequence())
+	if err != nil {
+		panic(err)
+	}
+	csr := x509.CertificateRequest{
+		RawSubject:         asn1,
+		EmailAddresses:     []string{emailAddress},
+		SignatureAlgorithm: x509.SHA256WithRSA,
+		URIs:               []*url.URL{uri},
+	}
+
+	bytes, err := x509.CreateCertificateRequest(rand.Reader, &csr, key)
+	if err != nil {
+		panic(err)
+	}
+	csrFile, err := os.Create(name + ".csr")
+	if err != nil {
+		panic(err)
+	}
+
+	pem.Encode(csrFile, &pem.Block{Type: "CERTIFICATE REQUEST", Bytes: bytes})
+	csrFile.Close()
+}
+```
+
+You can run this program with
+
+`$ go run csr-gen.go <URL-for-webhook>`
+
+and it will generate two files, server.csr and server-key.pem.
+
+You can then create a certificate signing request for the Kubernetes API server using the following YAML:
+
+```yaml
+apiVersion: certificates.k8s.io/v1beta1
+kind: CertificateSigningRequest
+metadata:
+  name: validating-controller.default
+spec:
+  groups:
+  - system:authenticated
+  request: REPLACEME
+  usages:
+  usages:
+  - digital signature
+  - key encipherment
+  - key agreement
+  - server auth
+```
+
+You will notice for the `request` field the value is `REPLACEME`; this needs to be replaced with the base64-encoded certificate signing request we produces in the preceding code:
+
+`$ perl -pi -e s/REPLACEME/$(base64 server.csr | tr -d '\n')/ \
+admission-controller-csr.yaml`
+
+Now that your certificate signing request is ready, you can send it to the API server to get the certificate:
+
+`kubectl create -f admission-controller-csr.yaml`
+
+Next you need to approve that request:
+
+`kubectl certificate approve validating-controller.default`
+
+Once approved, you can download the new certificate
+
+`$ kubectl get csr validating-controller.default -o json | \
+  jq -r .status.certificate | base64 -d > server.crt`
+
+With the certificate, you are finally ready to create an SSL-based admission controller (phew!).
+When the admission controller code recieves a requst. it contains an object of type `AdmissionReview`, which contains metadata about the request as well as the body of the request itself.
+In our validating admission controller, we have only registered for a single resource type and a single action (`CREATE`), so we don't need to examine the request metadata.
+Instead, we dive directly into the resource itself and validate that `requestsPerSecond` is positive and the URL scheme is valid.
+If they aren't, we return a JSON body disallowing the request.
+
+Implementing an admission controller to provide defaulting is similar to the steps just described, but instead of using a ValidatingWebHookConfiguration, you use a MutatingWebhookConfiguration, and you need to provide a JSON patch object to mutate the request object before it is stored.
+
+Here's a TypeScript snippet that you can add to your validating admission controller to add defaulting.
+If the `paths` field in the `loadtest` is a length of zero, adds a single path for `/index.html`:
+
+```go
+        if (needsPatch(loadtest)) {
+            const patch = [
+                { 'op': 'add', 'path': '/spec/paths', 'value': ['/index.html'] },
+            ]
+            response['patch'] = Buffer.from(JSON.stringify(patch))
+                .toString('base64');
+            response['patchType'] = 'JSONPatch';
+        }
+```
+
+You can then register this webhook as a MutatingWebhookConfiguration by simply changing the `kind` field in the YAML object and saving the file as mutating-controller.yaml.
+Then create the controller by running:
+
+`kubectl create -f mutating-controller.yaml`
+
+At this point, you've seen a complete example of how to extend the Kubernetes API server using custom resources and admission controllers.
+The following section descrives some general patterns for various extensions.
+
+## Patterns for Custom Resources
+
+Not all custom resouces are identical.
+There are a variety of reasons for extending the Kubernetes API surface area, and the following sections discuss some general patterns you may want to consider.
+
+### Just Data
+
+The easiest pattern for API extension is the notion of "just data".
+In this pattern, you are simply using the API server for storage and retrieval of information for your application.
+It is important to note that you should not use the Kubernetes API server for application data storage.
+The Kubernetes API server is not designed to be a key/value store for your app; instead, API extension should be control or configuration objects that help you manage the deployment or runtime of your application.
+An example use base for the "just data" pattern might be configuration for canary deployments of your application--for example, directing 10% of all traffic to an experimental backend.
+While in theory such configuration information could also be stored in a ConfigMap, ConfigMaps are essentially untyped, and sometimes using a more strongly typed API extension object provides clarity and ease of use.
+
+Extensions that are just data don't need a corresponding controller to activate them, but they may have validating or mutating admission controllers to ensure that they are well formed.
+For example, in the canary use case, a validating controller might ensure that all percentages in the canary object sum to 100%.
+
+### Compliers
+
+A slightly more complicated pattern is the "complier" or "abstraction" pattern.
+In this pattern, the API extension object represents a higher-level abstraction that is "complied" into a combination of lower-level Kubernetes objects.
+The LoadTest extension in the previous example is an example of this complier abstraction pattern.
+A user consumes the extension as a high-level concept, in this case a `loadtest`, but it comes into being by being deployed as a collection of Kubernetes Pods and services.
+To achieve this, a complied abstration requires an API controller to be running somewhere in the cluster to watch the current LoadTests and create the "compiled" representation (and likewise delete representations that no longer exist).
+In contrast to the operator pattern described next, however, there is no online health maintenance for complied abstractions; it is delegated down to the lower-level objects (e.g., Pods).
+
+### Operators
+
+While complier extensions provide easy-to-use abstractions, extensions that use the "operator" pattern provide online, proactive management of the resources created by the extensions.
+These extensions likely provide a higher-level abstraction (for example, a database) that is complied down to a lower-level representation, but they also provide online functionality, such as snapshot backups of the database or upgrade notifications when a new version of the software is available.
+To achieve this, the controller not only monitors the extension API to add or remove things as necessary, but also monitors the running state of the application supplied by the extension (e.g., a database) and takes actions to remediate unhealthy databases, take snapshots, or restore from a snapshot if a failure occurs.
+
+Operators are the most complicated pattern for API extension of Kubernetes, but they are also the most poweful, enabling users to get easy access to "self-driving" abstractions that are responsible not just for deployment, but also health checking and repair.
+
+### Getting Started
+
+Getting started extending the Kubernetes API can be a daunting and exhausting experience.
+Fortunately, there is a great deal of code to help you out.
+The Kubebuilder project contains a library of code intended to help you easily build relaible Kubernetes API extensions.
+It's a great resource to help you bootstrap your extension.
+
+## Summary
+
+One of the great "superpowers" of Kubernetes is its ecosystem, and one of the most significant things powering this ecosystem is the extensibility of the Kubernetes API.
+Whether you're designing your own extensions to customize your cluster or consuming off-the-shelf extensions as utilities, cluster services, or operators, API extensions are the key to making your cluster your own and building the right environment for the rapid development of reliable applications.
