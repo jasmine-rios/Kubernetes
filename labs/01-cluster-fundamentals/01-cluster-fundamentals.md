@@ -90,4 +90,53 @@ Then test it locally with
 `docker run -p 8080:8080 kubernetes-demo:v1`
 
 ^This command gave me an error so I checked `docker images`.
-I didn't see anything so I went back to the folder that contains my `dockerfile`
+I didn't see anything so I went in and created the `dockerfile` in Visual Studios Code in the folder `app`.
+
+I created this file structure 
+
+```
+Kubernetes/
+├── README.md
+├── .gitignore
+│
+├── app/
+│   ├── Dockerfile
+│   ├── app.py
+│   └── requirements.txt
+│
+├── kubernetes/
+│   ├── namespace.yaml
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   ├── configmap.yaml
+│   ├── secret.yaml
+│   ├── serviceaccount.yaml
+│   ├── ingress.yaml
+│   └── hpa.yaml
+│
+├── kind/
+│   └── cluster-config.yaml
+│
+├── helm/
+│   └── kubernetes-demo/
+│
+├── argocd/
+│   └── application.yaml
+│
+├── monitoring/
+│   ├── prometheus/
+│   └── grafana/
+│
+├── scripts/
+│
+├── labs/
+│   ├── 01-cluster-fundamentals/
+│   ├── 02-containers/
+│   ├── 03-pods/
+│   ├── 04-deployments/
+│   └── 05-networking/
+│
+└── .github/
+    └── workflows/
+        └── ci.yaml
+```
