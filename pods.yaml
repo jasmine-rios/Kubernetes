@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kubernetes-demo
+  labels:
+    app.kubernetes.io/name: kubernetes-demo
+spec:
+  containers:
+  - name: kubernetes-demo
+    image: kubernetes-demo:v1
+
