@@ -140,3 +140,62 @@ Kubernetes/
     └── workflows/
         └── ci.yaml
 ```
+
+I added this to app/Dockerfile
+
+```
+FROM python:3.12-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py .
+
+EXPOSE 8080
+
+CMD ["python", "app.py"]
+```
+
+I put this for app/requirements.txt
+
+```
+Flask==3.0.3
+```
+
+I put this for app/app.py
+```
+from flask import Flask
+import socket
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return {
+        "application": "Kubernetes GitOps Demo",
+        "version": "v1",
+        "hostname": socket.gethostname(),
+        "status": "Healthy"
+    }
+
+@app.route("/health")
+def health():
+    return {
+        "status": "healthy"
+    }, 200
+
+@app.route("/ready")
+def ready():
+    return {
+        "status": "ready"
+    }, 200
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=8080
+    )
+```
