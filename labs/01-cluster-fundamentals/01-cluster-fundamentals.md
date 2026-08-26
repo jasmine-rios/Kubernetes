@@ -80,4 +80,3 @@ local-path-storage:
 
 
 Then run `kubectl api-resources` to see all the things you can create by reaching out to the API server (e.g., ConfigMaps, namespaces, nodes, pods. secrets, services, policies, deployments, volumes, role, and rolebindings)
-

@@ -69,3 +69,8 @@ You can get wider output
 
 Get the minikube ip and Web-service node port and go to a browser and enter:
 <minikube ip>:30100
+
+Had to verify my docker image and then deleted my Pod with the pod.yaml 
+`kubectl delete pod kubernetes-demo`
+
+then ran `kubectl apply -f kuberenetes/pod.yaml`
