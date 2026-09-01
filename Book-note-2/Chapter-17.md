@@ -289,3 +289,294 @@ spec:
 ```
 
 1. The Service type set to `ClusterIP`
+
+2. The ClusterIP address assigned to the Service at runtime
+
+The ClusterIP address that makes the Service available in this example is `10.96.254.0`.
+Listing the Service object is an alternative way to render the information we need to make a call to the Service:
+```bash
+$ kubectl get service echoserver
+NAME         TYPE        CLUSTER-IP    EXTERNAL-IP   PORT(S)    AGE
+echoserver   ClusterIP   10.96.254.0   <none>        5005/TCP   8s
+```
+
+Next up, we'll try to make a call to the Service.
+
+### Accessing the Service
+
+You can access the Service using a combination of the ClusterIP address and incoming port: `10.96.254.0:5005`.
+Making a request from any other machine residing outside of the cluster will fail, as illustratred by the following `wget` command:
+```bash
+$ wget 10.96.254.0:5005 --timeout=5 --tries=1
+--2021-11-15 15:45:36--  http://10.96.254.0:5005/
+Connecting to 10.96.254.0:5005... failed: Operation timed out.
+Giving up.
+```
+
+Accessing the Service from a Pod from within the cluster properly routes the request to the Pod matching the label selection:
+```bash
+$ kubectl run tmp --image=busybox:1.36.1 --restart=Never -it --rm \
+  -- wget 10.96.254.0:5005
+Connecting to 10.96.254.0:5005 (10.96.254.0:5005)
+saving to 'index.html'
+index.html           100% |********************************|   408  0:00:00 ETA
+'index.html' saved
+pod "tmp" deleted
+```
+
+Apart from using the ClusterIP address and the port, you can also discover a Service by DNS name and environment variables available to containers
+
+### Discovering the Service by DNS lookup
+
+Kubernetes registers every Service by its name with the help of its DNS service named CoreDNS.
+Internally, CoreDNS will store the Service name as a hostname and maps it to the ClusterIP address.
+Accessing a Service by its DNS name instead of an IP address is much more convenient and expressive when building microservice architectures because IP addresses are ephemeral and unpredictable, whereas the labels are declarative and known.
+
+You can verify the correct service discovery by running a POd in the same namespace that makes a call to the Service by using its hostname and incoming port:
+```bash
+$ kubectl run tmp --image=busybox:1.36.1 --restart=Never -it --rm \
+  -- wget echoserver:5005
+Connecting to echoserver:5005 (10.96.254.0:5005)
+saving to 'index.html'
+index.html           100% |********************************|   408  0:00:00 ETA
+'index.html' saved
+pod "tmp" deleted
+```
+
+It's not uncommon to make a call from a Pod to a Service that lives in a different namespace.
+Referencing just the hostname of the Service does not work across namespaces.
+You need to append the namespace as well.
+The following makes a call from a Pod in the `other` namespace to the Service in the `default` namespace:
+```bash
+$ kubectl run tmp --image=busybox:1.36.1 --restart=Never -it --rm \
+  -n other -- wget echoserver.default:5005
+Connecting to echoserver.default:5005 (10.96.254.0:5005)
+saving to 'index.html'
+index.html           100% |********************************|   408  0:00:00 ETA
+'index.html' saved
+pod "tmp" deleted
+```
+
+The full hostname for a Service is `echoserver.default.svc.cluster.local`.
+The string `svc` descrives the type of resource we are communicating with.
+CoreDNS uses the default value `cluster.local` as a domain name (which is configurable if you want to change it).
+You do not have to spell out the full hostname when communicating with a Service.
+
+#### Discovering the Service by environment variables
+
+You may find it easier to use the Service connection information directly from the application running on a Pod.
+The kubelet makes the ClusterIP address and port for every active Service available as environment variables.
+The naming convention for Service-related environment variable are `<SERVICE_NAME>_SERVICE_HOST` and `<SERVICE_NAME>_SERVICE_PORT`.
+
+**AVAILBILITY OF SERVICE ENVIRONMENT VARIABLES**
+Make sure you create the Service before instantiating the Pod.
+Otherwise, those environment variables won't be populated.
+This is why most developers avoid relying on these environment variables, as they rely on the creation (or deletion) order of objects.
+**EON**
+
+You can check on the actual key-value pairs by listing the environment variables of the container, as follows:
+```bash
+$ kubectl exec -it echoserver -- env
+ECHOSERVER_SERVICE_HOST=10.96.254.0
+ECHOSERVER_SERVICE_PORT=8080
+...
+```
+
+The name of the Service, `echoserver` does not include any special characters.
+That's why the conversion to the environment variable key is easy; the Service name was simply uppercase to conform to environment variable naming conventions.
+Any special characters (such as dashes) in the Service name will be replaced by underscore characters.
+You need to make sure that the Service has been created before starting a Pod if you want those environment variables populated.
+
+## The NodePort Service Type
+
+Declaring a Service with type `NodePort` exposes access through the node's IP address and can be resolved from outside of the Kubernetes cluster.
+The node's IP address can be reached in combination with a port number in the range of 30000 and 32767 (also called the node port), assigned automatically upon the creation of the Service.
+
+The node port is opened on every node in the cluster, and its value is global and unique at the cluster-scope level.
+To avoid port conflicts, it's best to not define the exact node port and let Kubernetes find an available port.
+
+### Creating and Inspecting the Service
+
+The next two command create a Pod and a Service of type `NodePort`.
+The only difference here is that `nodeport` is provided instead of `clusterip` as a command-line option:
+```bash
+$ kubectl run echoserver --image=k8s.gcr.io/echoserver:1.10 --restart=Never \
+  --port=8080 -l app=echoserver
+pod/echoserver created
+$ kubectl create service nodeport echoserver --tcp=5005:8080
+service/echoserver created
+```
+
+The runtime representation of the Service object is shown in Example 17-3.
+It's important to point out taht the node port will be assigned automatically.
+Keep in mind `NodePort` (capital N) is the Service type, whereas `nodePort` (lowercase n) is the key for the value.
+
+Example 17-3. A `NodePort` Service object at runtime
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: echoserver
+spec:
+  type: NodePort           1
+  clusterIP: 10.96.254.0
+  selector:
+    app: echoserver
+  ports:
+  - port: 5005
+    nodePort: 30158        2
+    targetPort: 8080
+    protocol: TCP
+```
+
+1. The service type set to NodePort
+
+2. The Statically-assigned node port that makes the Service accessible from outside of the cluster
+
+Once the Service is created, you can list it.
+You will find that the port representation contains the statically assigned port that makes the Service accessible:
+```bash
+$ kubectl get service echoserver
+NAME         TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)          AGE
+echoserver   NodePort    10.101.184.152   <none>        5005:30158/TCP   5s
+```
+
+In this output, the node port is 30158 (identifiable by the seperating colon).
+The incoming port 5005 is still available for the purpose of resolving the Service from within the cluster.
+
+### Accessing the Service
+
+From within the cluster, you can still access the Service using the ClusterIP address and port number.
+This Service displays exactly the same behcatior as if it were of type `ClusterIP`:
+```bash
+$ kubectl run tmp --image=busybox:1.36.1 --restart=Never -it --rm \
+  -- wget 10.101.184.152:5005
+Connecting to 10.101.184.152:5005 (10.101.184.152:5005)
+saving to 'index.html'
+index.html           100% |********************************|   414  0:00:00 ETA
+'index.html' saved
+pod "tmp" deleted
+```
+
+From outside of the cluster, you need to use the IP address of any worker node in the cluster and the statically assigned port.
+One way to determine the worker node's IP address is by rendering the node details.
+Another option is to use the `status.hostIP` attribute value of a Pod, which is the IP address of the worker node the Pod runs on.
+
+The node IP address here is `192.168.64.15`.
+It can be used to call the Service from outside of the cluster:
+```bash
+$ kubectl get nodes -o \
+  jsonpath='{ $.items[*].status.addresses[?(@.type=="InternalIP")].address }'
+192.168.64.15
+$ wget 192.168.64.15:30158
+--2021-11-16 14:10:16--  http://192.168.64.15:30158/
+Connecting to 192.168.64.15:30158... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: unspecified [text/plain]
+Saving to: 'index.html'
+...
+```
+
+## The LoadBalancer Service Type
+
+The last Service type to discuss in this book is the `LoadBalancer`.
+This Service type provisions an external load balancer, primarly available to Kubernetes cloud providers, which exposes a single IP address to distribute incoming requests to the cluster nodes.
+The implementation of the load balancing strategy (e.g., round-robin) is up to the cloud provider.
+
+**LOAD BALANCERS FOR ON-PREMISES KUBERNETES CLUSTERS**
+Kubernetes does not offer a native load balancer solution for on-premises clusters.
+Cloud providers are in charge of providing an appropriate implementation.
+The MetalLB project aims to fill the gap.
+**EON**
+
+The load balancer routes traffic between different nodes, as long as the targeted Pods fulfill the requested label selection.
+
+### Creating and Inspecting the Service
+
+To create a Service as a load balancer, set the type to `LoadBalancer` in the manifest or by using the `create service loadbalancer` command:
+```bash
+$ kubectl run echoserver --image=k8s.gcr.io/echoserver:1.10 --restart=Never \
+  --port=8080 -l app=echoserver
+pod/echoserver created
+$ kubectl create service loadbalancer echoserver --tcp=5005:8080
+service/echoserver created
+```
+
+The runtime characteristics of a `LoadBalancer` Service type looks similar to the ones provided by the `NodePort` Service type.
+The main difference is that external IP address column has a value, as shown in Example 17-4.
+
+Example 17-4. A `LoadBalancer` Service object at runtime
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: echoserver
+spec:
+  type: LoadBalancer            1
+  clusterIP: 10.96.254.0
+  loadBalancerIP: 10.109.76.157   2
+  selector:
+    app: echoserver
+  ports:
+  - port: 5005
+    targetPort: 8080
+    nodePort: 30158
+    protocol: TCP
+```
+
+1. The Service type set to `LoadBalancer`
+
+2. The external IP address assigned to the Service at runtime
+
+Listing the Service renders the external IP address, which is `10.109.76.157`, as demonstrated by this command:
+```bash
+$ kubectl get service echoserver
+NAME         TYPE           CLUSTER-IP      EXTERNAL-IP     PORT(S)          AGE
+echoserver   LoadBalancer   10.109.76.157   10.109.76.157   5005:30642/TCP   5s
+```
+
+Given that the external load balancer needs to be provisioned by the cloud provider, it may take a little time until the external IP address becomes available.
+
+### Accessing the Service
+
+To call the Service from outside of the cluster, use the external IP address and its incoming port:
+```bash
+$ wget 10.109.76.157:5005
+--2021-11-17 11:30:44--  http://10.109.76.157:5005/
+Connecting to 10.109.76.157:5005... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: unspecified [text/plain]
+Saving to: 'index.html'
+...
+```
+
+As dicussed, a `LoadBalancer` Service is also accessible in the same way as you would access a `ClusterIP` or `NodePort` Service.
+
+## Summary
+
+Kubernetes assigns a unique IP address for every Pod in the cluster.
+Pods can communicate with each other using that IP address; however, you cannot rely on the IP address to be stable over time.
+That's why Kubernetes provides the Service resource type.
+
+A Service forwards netwokr traffic to a set of Pods based on label selection and port mappings.
+Every Service needs to assign a type that determines how the Service becomes accessible from within or outside of the cluster.
+The Service types relevant to the exam are `ClusterIP`, `NodePort`, and `LoadBalancer`.
+CoreDNS, the DNS server for Kubernetes, allows Pods to access the Service by hostname from the same and other namespaces.
+
+## Exam Essentials
+
+Understand the purpose of a Service
+  Pod-to-Pod communication via their IP addresses doesn't guarentee a stable network interface over time.
+  A restart of the Pod will lease a new virtual IP address.
+  The purpose of a Service is to provide that stable network interface so that you can operate complex microservice architecture that runs in a Kubernetes cluster.
+  In most cases, Pods call a Service by hostname.
+  The hostname is provided by the DNS server named CoreDNS running as a Pod in the `kube-system` namespace.
+
+Practice how to access a Service for each type
+  The exam expects you to understand the difference between the Service types `ClusterIP`, `NodePort`, and `LoadBalancer`.
+  Depending on the assigned type, a Service becomes accessible from inside the cluster or from outside the cluster.
+
+Work through Service troubleshooting sceanrios
+  It's easy to get the configuration of a Service wrong. Any misconfiguration won't allow network traffic to reach the set of Pods it was intended for.
+  Common misconfigurations include incorrect label selection and port assignments.
+  The `kubectl get endpoints` command will give you an idea of which Pods a Service can route traffic to.
